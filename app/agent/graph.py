@@ -8,13 +8,21 @@ from app.agent.state import AgentState
 from app.agent.nodes import make_nodes, should_continue
 from app.agent.tools import make_todo_tools
 from app.config import get_settings
+import psycopg
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
 _compiled_graph = None
 
 
-async def build_graph(db_session_factory):
+async def build_graph(db_session_factory, store=None):
     """
     Build and compile the agent graph.
     Call once at startup; reuse the returned graph for all requests.
@@ -48,13 +56,31 @@ async def build_graph(db_session_factory):
 
     # Set up PostgreSQL checkpointer for conversation memory
     try:
-        checkpointer = AsyncPostgresSaver.from_conn_string(settings.database_url_sync)
+        # checkpointer = AsyncPostgresSaver.from_conn_string(settings.database_url_sync)
+        conn_string = settings.database_url_sync.replace("postgresql+psycopg://", "postgresql://")
+
+        conn = await psycopg.AsyncConnection.connect(
+            conn_string,
+            autocommit=True,  # required for AsyncPostgresSaver
+        )
+        checkpointer = AsyncPostgresSaver(conn)
+        await checkpointer.setup()  # creates checkpoint tables in postgres
+
         # AsyncPostgresSaver handles initialization internally when needed
-        _compiled_graph = builder.compile(checkpointer=checkpointer)
+        compile_kwargs = {"checkpointer": checkpointer}
+        if store is not None:
+            compile_kwargs["store"] = store
+        _compiled_graph = builder.compile(**compile_kwargs)
+        logger.info(f"✅ Graph compiled with checkpointer")
+
     except Exception as e:
         print(f"Warning: Checkpointer initialization failed: {e}")
         print("Compiling graph without checkpointer (no conversation history)")
-        _compiled_graph = builder.compile()
+        # If a custom store was provided, try compiling with it even if checkpointer failed
+        if store is not None:
+            _compiled_graph = builder.compile(store=store)
+        else:
+            _compiled_graph = builder.compile()
     
     return _compiled_graph
 
@@ -78,6 +104,9 @@ async def run_agent(graph, user_id: str, telegram_id: str, chat_id: str, user_me
             "thread_id": f"user_{telegram_id}",
         }
     }
+
+    # checkpoint = await graph.aget_state(config)
+    # logger.info(f"Existing messages in thread: {len(checkpoint.values.get('messages', []))}")
 
     input_state = {
         "messages": [HumanMessage(content=user_message)],

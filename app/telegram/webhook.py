@@ -3,6 +3,8 @@ Telegram webhook handler.
 Receives updates from Telegram and routes them to the LangGraph agent.
 """
 import logging
+
+from pymupdf import message
 from fastapi import APIRouter, Request, HTTPException, Depends
 from telegram import Update
 from telegram.ext import Application
@@ -12,6 +14,11 @@ from app.db.session import get_db, AsyncSessionLocal
 from app.db.crud import get_or_create_user
 from app.telegram.sender import send_message, send_typing
 from app.agent.graph import get_graph, run_agent
+
+import httpx
+import tempfile
+import os
+from app.telegram.sender import get_bot
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -23,7 +30,6 @@ router = APIRouter()
 async def webhook_info():
     """Check webhook registration status and configuration."""
     try:
-        from app.telegram.sender import get_bot
         bot = get_bot()
         
         if not settings.telegram_bot_token:
@@ -66,14 +72,33 @@ async def telegram_webhook(request: Request):
         raise HTTPException(status_code=400, detail="Invalid update")
 
     # Only handle text messages
-    if not update.message or not update.message.text:
+    # if not update.message or not update.message.text:
+    #     return {"ok": True}
+    if not update.message or (not update.message.text and not update.message.voice):
         return {"ok": True}
 
     message = update.message
     telegram_user = message.from_user
     chat_id = message.chat_id
-    text = message.text.strip()
 
+    if message.voice:
+        try:
+            await send_typing(chat_id)
+            file_path = await download_voice(message.voice.file_id)
+            text = await transcribe_voice(file_path)
+            os.unlink(file_path)  # clean up temp file
+            logger.info(f"Transcribed voice: {text}")
+        except Exception as e:
+            logger.error(f"Voice transcription failed: {e}")
+            await send_message(chat_id, "Sorry, I couldn't understand your voice message.")
+            return {"ok": True}
+
+    # Handle text message
+    elif message.text:
+        text = message.text.strip()
+    else:
+        return {"ok": True}
+        
     # Ignore commands for now (can extend later)
     if text.startswith("/start"):
         logger.info(f"Received /start from user {telegram_user.id} (chat_id: {chat_id})")
@@ -140,3 +165,32 @@ async def telegram_webhook(request: Request):
         await send_message(chat_id, "Sorry, I'm having trouble accessing my memory right now. Please try again later.")
 
     return {"ok": True}
+
+async def transcribe_voice(file_path: str) -> str:
+    """Transcribe using Groq Whisper API (free tier)."""
+    async with httpx.AsyncClient() as client:
+        with open(file_path, "rb") as f:
+            response = await client.post(
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+                data={  "model": "whisper-large-v3",
+                        "language": "vi",
+                        "prompt": "todo tasks, reminders, appointments",},
+                files={"file": ("voice.ogg", f, "audio/ogg")},
+            )
+        response.raise_for_status()
+        return response.json()["text"]
+
+
+async def download_voice(file_id: str) -> str:
+    """Download voice file from Telegram and return local path."""
+    
+    bot = get_bot()
+    
+    # Get file path from Telegram
+    file = await bot.get_file(file_id)
+    
+    # Download to temp file
+    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+        await file.download_to_memory(tmp)
+        return tmp.name

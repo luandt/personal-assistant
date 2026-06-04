@@ -93,7 +93,10 @@ def make_todo_tools(db_session_factory):
             tag_str = " ".join(f"#{tag}" for tag in (t.tags or []))
             status_emoji = {"pending": "⏳", "in_progress": "🔄", "done": "✅"}.get(t.status.value, "•")
             priority_emoji = {"low": "🟢", "medium": "🟡", "high": "🔴"}.get(t.priority.value, "•")
-            lines.append(f"{status_emoji} [{t.id[:8]}] {t.title}\n   {priority_emoji} {t.priority.value} | 📅 {due_str} {tag_str}")
+            lines.append(
+                f"{status_emoji} [{t.id[:8]}] {t.title}\n"
+                f"   status: {t.status.value} | priority: {t.priority.value} | 📅 {due_str} {tag_str}"
+            )
 
         return "\n".join(lines)
 

@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from app.config import get_settings
 from app.db.session import init_db, AsyncSessionLocal
 from app.agent.graph import build_graph
+from app.agent.store import generate_store
 from app.telegram.webhook import router as webhook_router
 from app.scheduler.reminders import start_scheduler, stop_scheduler
 
@@ -35,10 +36,14 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to initialize database: {e}")
         logger.warning("Continuing startup without database. Some features may be unavailable.")
 
-    # 2. Build LangGraph agent (with tools + checkpointer)
+    # 2. Build LangGraph agent (with tools + checkpointer + custom store)
+    store_cm = generate_store()
+    store = None
     try:
-        await build_graph(db_session_factory=AsyncSessionLocal)
-        logger.info("LangGraph agent built.")
+        # Enter the store context and keep it open for the app lifetime
+        store = await store_cm.__aenter__()
+        await build_graph(db_session_factory=AsyncSessionLocal, store=store)
+        logger.info("LangGraph agent built with custom store.")
     except Exception as e:
         logger.error(f"Failed to build LangGraph agent: {e}")
         logger.warning("Continuing startup. Agent features will be unavailable.")
@@ -66,6 +71,13 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down...")
+    try:
+        # Close the store context if it was opened
+        if store is not None:
+            await store_cm.__aexit__(None, None, None)
+            logger.info("Custom store shut down.")
+    except Exception as e:
+        logger.warning(f"Failed to shut down custom store: {e}")
     stop_scheduler()
 
 

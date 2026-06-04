@@ -30,6 +30,8 @@ After using tools, summarize what was done in a brief, human-friendly way.
 Current user_id: {user_id}
 """
 
+MAX_HISTORY_MESSAGES = 10
+
 
 def make_nodes(tools: list, llm_model: str = None):
     """
@@ -45,9 +47,9 @@ def make_nodes(tools: list, llm_model: str = None):
         """Main LLM reasoning node — decides whether to use tools or respond directly."""
         user_id = state.get("user_id", "")
         system = SystemMessage(content=SYSTEM_PROMPT.format(user_id=user_id))
-        messages = [system] + list(state["messages"])
+        messages = [system] + list(state["messages"])[-MAX_HISTORY_MESSAGES:]
 
-        logger.info(f"Calling LLM with {len(messages)} messages, user_id={user_id}")
+        logger.info(f"Calling LLM with {len(messages)} messages (last {MAX_HISTORY_MESSAGES}), user_id={user_id}")
         response = await llm.ainvoke(messages)
         logger.info(f"LLM response type: {type(response).__name__}, has tool_calls: {hasattr(response, 'tool_calls') and bool(response.tool_calls)}")
         if hasattr(response, 'tool_calls') and response.tool_calls:

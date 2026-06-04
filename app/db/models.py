@@ -23,6 +23,27 @@ class TodoStatus(str, enum.Enum):
     in_progress = "in_progress"
     done = "done"
 
+    @classmethod
+    def _missing_(cls, value):
+        if isinstance(value, str):
+            normalized = value.strip().lower().replace(" ", "_")
+            alias_map = {
+                "completed": "done",
+                "complete": "done",
+                "finished": "done",
+                "in_progress": "in_progress",
+                "in progress": "in_progress",
+                "started": "in_progress",
+                "doing": "in_progress",
+                "pending": "pending",
+                "todo": "pending",
+                "open": "pending",
+            }
+            normalized = alias_map.get(normalized, normalized)
+            if normalized in cls._value2member_map_:
+                return cls(normalized)
+        return super()._missing_(value)
+
 
 def gen_uuid() -> str:
     return str(uuid.uuid4())

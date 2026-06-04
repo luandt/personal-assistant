@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     # LLM
     nvidia_api_key: str = ""
     llm_model: str = "claude-sonnet-4-20250514"
+    groq_api_key: str = ""
 
     # Database
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/assistant"

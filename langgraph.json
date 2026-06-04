@@ -1,0 +1,10 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "agent": "./app/agent/graph.py:build_graph"
+  },
+  "env": ".env",
+  "store": {
+    "path": "./app/agent/store.py:generate_store"
+  }
+}
