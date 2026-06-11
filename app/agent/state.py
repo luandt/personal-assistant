@@ -27,3 +27,6 @@ class AgentState(TypedDict):
     current_todos: List[TodoItem]
     last_action: str
     response_to_user: str
+
+    confidence: float           # 0.0–1.0
+    ambiguous_fields: List[str] # which fields are unclear

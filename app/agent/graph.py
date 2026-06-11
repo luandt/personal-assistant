@@ -2,14 +2,17 @@
 Build and compile the LangGraph agent graph with PostgreSQL checkpointing.
 """
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from app.agent.state import AgentState
-from app.agent.nodes import make_nodes, should_continue
+from app.agent.nodes import make_nodes, should_continue, should_continue_llm
 from app.agent.tools import make_todo_tools
 from app.config import get_settings
 import psycopg
 import logging
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+from dotenv import load_dotenv
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,26 +36,48 @@ async def build_graph(db_session_factory, store=None):
     tools = make_todo_tools(db_session_factory)
 
     # Create node functions
-    call_llm, execute_tools = make_nodes(tools)
-
-    # Build graph
+    classify_intent, ask_clarification, todo_llm, execute_tools = make_nodes(tools)
+ 
     builder = StateGraph(AgentState)
-    builder.add_node("call_llm", call_llm)
+    
+    # Nodes
+    builder.add_node("classify_intent", classify_intent)
+    builder.add_node("ask_clarification", ask_clarification)
+    builder.add_node("todo_llm", todo_llm)
     builder.add_node("execute_tools", execute_tools)
-
-    builder.set_entry_point("call_llm")
-
+ 
+    # Entry: always classify first
+    builder.set_entry_point("classify_intent")
+ 
+    # Route 1: after classification
+    # - If low confidence → ask for clarification → END
+    # - Else → call LLM (with intent info injected)
     builder.add_conditional_edges(
-        "call_llm",
+        "classify_intent",
         should_continue,
+        {
+            "ask_clarification": "ask_clarification",
+            "todo_llm": "todo_llm",
+        },
+    )
+ 
+    # After clarification, end the turn (wait for user response)
+    builder.add_edge("ask_clarification", END)
+ 
+    # Route 2: after LLM call
+    # - If has tool_calls → execute
+    # - Else → end
+    builder.add_conditional_edges(
+        "todo_llm",
+        should_continue_llm,
         {
             "execute_tools": "execute_tools",
             "end": END,
         },
     )
 
-    # After executing tools, loop back to LLM to process results
-    builder.add_edge("execute_tools", "call_llm")
+    builder.add_edge("execute_tools", "todo_llm")
+
 
     # Set up PostgreSQL checkpointer for conversation memory
     try:
@@ -102,7 +127,14 @@ async def run_agent(graph, user_id: str, telegram_id: str, chat_id: str, user_me
     config = {
         "configurable": {
             "thread_id": f"user_{telegram_id}",
-        }
+        },
+        
+        # "configurable": {"thread_id": thread_id},
+        "metadata": {
+            "user_id": user_id,
+            "telegram_chat_id": chat_id,
+        },
+        "tags": ["telegram", "todo-bot"],
     }
 
     # checkpoint = await graph.aget_state(config)
@@ -118,6 +150,8 @@ async def run_agent(graph, user_id: str, telegram_id: str, chat_id: str, user_me
         "current_todos": [],
         "last_action": "",
         "response_to_user": "",
+        "confidence": 0.0,
+        "ambiguous_fields": [],
     }
 
     result = await graph.ainvoke(input_state, config=config)

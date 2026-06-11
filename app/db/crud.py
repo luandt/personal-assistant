@@ -1,15 +1,21 @@
-from datetime import datetime
+import logging
+from datetime import datetime, timezone
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, delete
 from app.db.models import User, Todo, Priority, TodoStatus
 
+logger = logging.getLogger(__name__)
+
 
 # ── Users ──────────────────────────────────────────────────────────────────
 
 async def get_or_create_user(db: AsyncSession, telegram_id: str, username: str = None, first_name: str = None) -> User:
-    result = await db.execute(select(User).where(User.telegram_id == telegram_id))
+    query = select(User).where(User.telegram_id == telegram_id)
+    logger.debug("Executing query: %s", query)
+    result = await db.execute(query)
     user = result.scalar_one_or_none()
+    logger.debug("Query result: %s", user)
     if user is None:
         user = User(telegram_id=telegram_id, username=username, first_name=first_name)
         db.add(user)
@@ -18,8 +24,12 @@ async def get_or_create_user(db: AsyncSession, telegram_id: str, username: str =
 
 
 async def get_user_by_telegram_id(db: AsyncSession, telegram_id: str) -> Optional[User]:
-    result = await db.execute(select(User).where(User.telegram_id == telegram_id))
-    return result.scalar_one_or_none()
+    query = select(User).where(User.telegram_id == telegram_id)
+    logger.debug("Executing query: %s", query)
+    result = await db.execute(query)
+    user = result.scalar_one_or_none()
+    logger.debug("Query result: %s", user)
+    return user
 
 
 # ── Todos ──────────────────────────────────────────────────────────────────
@@ -67,10 +77,14 @@ async def list_todos(
         conditions.append(Todo.due_date <= due_before)
     if due_after:
         conditions.append(Todo.due_date >= due_after)
+    
+    logger.info(f"Listing todos with conditions: {conditions}")
 
     query = select(Todo).where(and_(*conditions)).order_by(Todo.due_date.asc().nulls_last(), Todo.created_at.desc()).limit(limit)
+    logger.info("Executing query in crud: %s", query)
     result = await db.execute(query)
     todos = result.scalars().all()
+    logger.info("Query result in crud: %s todos", len(todos))
 
     # Filter by tags if needed
     if tags:
@@ -80,10 +94,12 @@ async def list_todos(
 
 
 async def get_todo(db: AsyncSession, todo_id: str, user_id: str) -> Optional[Todo]:
-    result = await db.execute(
-        select(Todo).where(and_(Todo.id == todo_id, Todo.user_id == user_id))
-    )
-    return result.scalar_one_or_none()
+    query = select(Todo).where(and_(Todo.id == todo_id, Todo.user_id == user_id))
+    logger.debug("Executing query: %s", query)
+    result = await db.execute(query)
+    todo = result.scalar_one_or_none()
+    logger.debug("Query result: %s", todo)
+    return todo
 
 
 async def update_todo(
@@ -105,7 +121,7 @@ async def update_todo(
                 value = TodoStatus(value)
             setattr(todo, key, value)
 
-    todo.updated_at = datetime.utcnow()
+    todo.updated_at = datetime.now()
     await db.flush()
     await db.refresh(todo)
     return todo
@@ -121,8 +137,11 @@ async def delete_todo(db: AsyncSession, todo_id: str, user_id: str) -> bool:
 
 
 async def delete_todos_by_tag(db: AsyncSession, user_id: str, tag: str) -> int:
-    result = await db.execute(select(Todo).where(Todo.user_id == user_id))
+    query = select(Todo).where(Todo.user_id == user_id)
+    logger.debug("Executing query: %s", query)
+    result = await db.execute(query)
     todos = result.scalars().all()
+    logger.debug("Query result: %s todos", len(todos))
     count = 0
     for todo in todos:
         if tag in (todo.tags or []):
@@ -134,8 +153,7 @@ async def delete_todos_by_tag(db: AsyncSession, user_id: str, tag: str) -> int:
 
 async def search_todos(db: AsyncSession, user_id: str, query: str) -> List[Todo]:
     q = f"%{query.lower()}%"
-    result = await db.execute(
-        select(Todo).where(
+    query_stmt = select(Todo).where(
             and_(
                 Todo.user_id == user_id,
                 or_(
@@ -144,19 +162,24 @@ async def search_todos(db: AsyncSession, user_id: str, query: str) -> List[Todo]
                 )
             )
         ).limit(10)
-    )
-    return result.scalars().all()
+    logger.debug("Executing query: %s", query_stmt)
+    result = await db.execute(query_stmt)
+    todos = result.scalars().all()
+    logger.debug("Query result: %s todos", len(todos))
+    return todos
 
 
 async def get_due_reminders(db: AsyncSession, before: datetime) -> List[Todo]:
     """Get todos with due_date <= before that haven't had reminders sent."""
-    result = await db.execute(
-        select(Todo).where(
+    query = select(Todo).where(
             and_(
                 Todo.due_date <= before,
                 Todo.reminder_sent == False,
                 Todo.status != TodoStatus.done,
             )
         )
-    )
-    return result.scalars().all()
+    logger.debug("Executing query: %s", query)
+    result = await db.execute(query)
+    todos = result.scalars().all()
+    logger.debug("Query result: %s todos", len(todos))
+    return todos

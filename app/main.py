@@ -21,6 +21,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 settings = get_settings()
+logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
 
 @asynccontextmanager

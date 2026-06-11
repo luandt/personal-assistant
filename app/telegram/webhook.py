@@ -174,7 +174,7 @@ async def transcribe_voice(file_path: str) -> str:
                 "https://api.groq.com/openai/v1/audio/transcriptions",
                 headers={"Authorization": f"Bearer {settings.groq_api_key}"},
                 data={  "model": "whisper-large-v3",
-                        "language": "vi",
+                        "language": "en",
                         "prompt": "todo tasks, reminders, appointments",},
                 files={"file": ("voice.ogg", f, "audio/ogg")},
             )
@@ -183,7 +183,8 @@ async def transcribe_voice(file_path: str) -> str:
 
 
 async def download_voice(file_id: str) -> str:
-    """Download voice file from Telegram and return local path."""
+    """Download voice file from Telegram and return ldocal path."""
+    
     
     bot = get_bot()
     

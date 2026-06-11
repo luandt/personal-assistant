@@ -3,7 +3,7 @@ LangGraph tools — each tool receives the DB session via a closure created
 at graph-build time (inject_db_tools), so the graph remains pure Python
 with no FastAPI dependency injection needed.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 import dateparser
 from langchain_core.tools import tool
@@ -53,14 +53,22 @@ def make_todo_tools(db_session_factory):
         priority: str = "",
         tags: str = "",
         period: str = "",
+        due_date_str: str = "",
     ) -> str:
         """List todos for a user. period must be one of: 'today', 'tomorrow', 'week', 'all'. Use 'tomorrow' when user asks about tomorrow's tasks. Use 'today' for today. Use 'week' for next 7 days. Use 'all' to list everything."""
         from app.db import crud
         due_before = None
         due_after = None
-        now = datetime.utcnow()
+        now = datetime.now()
+
+        if due_date_str:
+            parsed_date = dateparser.parse(due_date_str, settings={"PREFER_DATES_FROM": "future"})
+            print(f"Parsed due_date_str '{due_date_str}' into {parsed_date}")
+            if parsed_date:
+                due_after = parsed_date.replace(hour=0, minute=0, second=0)
+                due_before = parsed_date.replace(hour=23, minute=59, second=59)
  
-        if period == "today":
+        elif period == "today":
             due_after = now.replace(hour=0, minute=0, second=0)
             due_before = now.replace(hour=23, minute=59, second=59)
         elif period == "tomorrow":

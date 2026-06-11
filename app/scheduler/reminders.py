@@ -3,7 +3,7 @@ APScheduler-based reminder system.
 Polls the database every minute for todos that are due and haven't been notified.
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
@@ -18,7 +18,7 @@ scheduler = AsyncIOScheduler()
 
 async def check_and_send_reminders():
     """Check for due todos and send Telegram reminders."""
-    now = datetime.utcnow()
+    now = datetime.now()
     lookahead = now + timedelta(minutes=1)  # fire reminders up to 1 min early
 
     try:
