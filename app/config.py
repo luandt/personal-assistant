@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     app_env: str = "development"
     secret_key: str = "change_me_in_production"
 
+    # Tavily API key (required for web search)
+    tavily_api_key: str = ""
+
+
     class Config:
         env_file = ".env"
         extra = "ignore"

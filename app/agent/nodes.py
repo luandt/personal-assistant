@@ -11,6 +11,8 @@ from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from app.agent.state import AgentState
 from app.config import get_settings
 
+from tavily import TavilyClient
+        
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
@@ -78,7 +80,24 @@ FOR SEARCH intent:
 
 FOR CHAT intent:
     - no specific entities, just general conversation
- 
+
+FOR WEB_SEARCH intent (web search):
+  - query: the web search question as-is
+  Example: "What's the weather in Ho Chi Minh City?" → 
+    {{"intent": "web_search", "query": "weather Ho Chi Minh City", "confidence": 0.95}}
+  Example: "Who won World Cup 2024?" → 
+    {{"intent": "web_search", "query": "World Cup 2024 winner", "confidence": 0.92}}
+
+DETECTION RULES FOR WEB_SEARCH:
+    - Message must be start with: "Search web for", "Search for", "Look up", "Find out", "What's", "Who", "How do I", "What are the latest", "google", "bing", "tavily"
+    - If not start with above keywords, it's possible a genenral chat message, even if it contains a question. In that case, classify as "chat" intent, not "web_search".
+    - Questions about current events, news, weather, sports 
+    
+    scores
+    - How-to questions about non-todo topics
+    - Questions starting with: "What's", "Who", "How do I", "What are the latest"
+    - Not recommend about todo topics (e.g., "Do you want to create a todo/reminder for that?") because it can be a general chat message
+
 IMPORTANT RULES:
 - confidence: 1.0 = 100% certain about what to do, 0.0 = completely unclear
 - due_date_str: ALWAYS extract as natural language string, NEVER try to parse it
@@ -89,7 +108,16 @@ IMPORTANT RULES:
 - Return valid JSON only — no markdown, no code fences, no preamble
  
 User message: {user_message}"""
- 
+
+CHAT_RESPONSE_PROMPT = """You are PA, a helpful chat assistant.
+
+Important:
+- Do NOT mention todo, reminders, task creation, or scheduling unless the user clearly asks for it.
+- For normal chat, answer naturally.
+- Answer in the language the user used.
+- If you do not understand the user's message, ask them to rephrase.
+- If the user expresses sadness, fear, death, or hopelessness, respond supportively and ask a gentle follow-up.
+ """
  
 def extract_text(content) -> str:
     """
@@ -212,7 +240,64 @@ def make_nodes(tools: list, llm_model: str = None):
             "messages": [response],
             "last_action": "llm_called",
         }
+    
+    async def web_search_node(state: AgentState) -> dict:
+        """
+        Perform a web search using Tavily API for non-todo queries.
+        Returns formatted search results.
+        """
+        
+        user_message = state["messages"][-1].content
+        query = state.get("entities", {}).get("query", user_message)
+        
+        logger.info(f"Web search query: {repr(query[:80])}")
+        
+        try:
+            # Initialize Tavily client with API key
+            client = TavilyClient(api_key=settings.tavily_api_key)
+            
+            # Perform search
+            results = client.search(
+                query=query,
+                include_domains=["vnexpress.net"],
+                max_results=5,  # Get top 5 results
+                include_answer=True  # Include AI-generated answer
+            )
+            
+            # Format results for user
+            response_text = format_tavily_results(query, results)
+            
+            logger.info(f"Web search completed: {len(results.get('results', []))} results")
+            
+        except Exception as e:
+            logger.error(f"Web search failed: {e}")
+            response_text = f"Sorry, I couldn't search the web right now. Error: {str(e)}"
+        
+        return {
+            "messages": [AIMessage(content=response_text)],
+            "last_action": "web_search_completed",
+            "search_results": response_text,
+        }
  
+    async def chat_response_node(state: AgentState) -> dict:
+        """
+        Generate a response for general chat messages (non-todo).
+        """
+        print(f"messages list: {state['messages']}")
+        user_message = state["messages"][-1].content if state["messages"] else ""
+        
+        prompt = CHAT_RESPONSE_PROMPT + f"\n\nUser: {user_message}\nPA:"
+        messages = [SystemMessage(content=prompt)]
+        
+        logger.info(f"Generating chat response for: {repr(user_message[:80])}")
+        
+        response = await llm.ainvoke(messages)
+        
+        return {
+            "messages": [response],
+            "last_action": "chat_response_generated",
+        }
+    
     async def execute_tools(state: AgentState) -> dict:
         """Execute any tool calls requested by the LLM."""
         from langchain_core.messages import ToolMessage
@@ -248,22 +333,29 @@ def make_nodes(tools: list, llm_model: str = None):
             "last_action": "tools_executed",
         }
  
-    return classify_intent, ask_clarification, todo_llm, execute_tools
+    return classify_intent, ask_clarification, todo_llm, execute_tools, web_search_node, chat_response_node
  
  
 def should_continue(state: AgentState) -> str:
     """
     Route after classify_intent:
-    - If very low confidence (< 0.65) → ask_clarification
-    - Otherwise → todo_llm (with classification info injected)
-    
-    This lets Claude handle minor ambiguities naturally while
-    only asking for explicit clarification when truly uncertain.
+    - If web_search intent → web_search_node
+    - If very low confidence → ask_clarification
+    - Otherwise → todo_llm
     """
+    intent = state.get("intent", "")
     confidence = state.get("confidence", 0.0)
     
+    if intent == "chat":
+        logger.info("Chat intent detected")
+        return "chat_response_node"
+    
+    if intent == "web_search":
+        logger.info("Web search intent detected")
+        return "web_search"
+    
     if confidence < 0.65:
-        logger.info(f"Very low confidence ({confidence:.2f}) - asking for clarification")
+        logger.info(f"Low confidence ({confidence:.2f}) - asking for clarification")
         return "ask_clarification"
     
     logger.info(f"Adequate confidence ({confidence:.2f}) - proceeding to LLM")
@@ -276,5 +368,45 @@ def should_continue_llm(state: AgentState) -> str:
     last_message = messages[-1]
     if hasattr(last_message, "tool_calls") and last_message.tool_calls:
         return "execute_tools"
-    return "end"
- 
+    return "end" 
+
+def format_tavily_results(query: str, results: dict) -> str:
+    """
+    Format Tavily search results into readable text.
+    
+    Tavily returns:
+    {
+        "answer": "AI-generated answer",
+        "results": [
+            {
+                "title": "Result title",
+                "url": "https://...",
+                "content": "Result content",
+                "score": 0.95
+            },
+            ...
+        ]
+    }
+    """
+    lines = [f"🔍 Search results for: **{query}**\n"]
+    
+    # Include AI answer if available
+    if results.get("answer"):
+        lines.append(f"📝 Summary: {results['answer']}\n")
+    
+    # Include top results
+    if results.get("results"):
+        lines.append("📋 Sources:")
+        for i, result in enumerate(results["results"][:3], 1):
+            title = result.get("title", "Untitled")
+            url = result.get("url", "")
+            content = result.get("content", "No content")[:150]
+            
+            lines.append(f"\n{i}. **{title}**")
+            if url:
+                lines.append(f"   🔗 {url}")
+            lines.append(f"   {content}...")
+    else:
+        lines.append("No results found.")
+    
+    return "\n".join(lines)

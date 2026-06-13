@@ -30,3 +30,5 @@ class AgentState(TypedDict):
 
     confidence: float           # 0.0–1.0
     ambiguous_fields: List[str] # which fields are unclear
+
+    search_results: str

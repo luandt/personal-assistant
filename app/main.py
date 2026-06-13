@@ -5,7 +5,7 @@ Handles startup (DB init, graph build, scheduler) and the Telegram webhook.
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
@@ -101,3 +101,7 @@ async def root():
 @app.get("/health")
 async def health():
     return JSONResponse({"status": "healthy"})
+
+@app.head("/")
+async def health_head():
+    return Response(status_code=200)

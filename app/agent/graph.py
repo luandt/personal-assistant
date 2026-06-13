@@ -1,6 +1,8 @@
 """
 Build and compile the LangGraph agent graph with PostgreSQL checkpointing.
 """
+import uuid
+
 from langgraph.graph import StateGraph, END
 
 from app.agent.state import AgentState
@@ -36,7 +38,7 @@ async def build_graph(db_session_factory, store=None):
     tools = make_todo_tools(db_session_factory)
 
     # Create node functions
-    classify_intent, ask_clarification, todo_llm, execute_tools = make_nodes(tools)
+    classify_intent, ask_clarification, todo_llm, execute_tools, web_search_node, chat_response_node = make_nodes(tools)
  
     builder = StateGraph(AgentState)
     
@@ -45,6 +47,8 @@ async def build_graph(db_session_factory, store=None):
     builder.add_node("ask_clarification", ask_clarification)
     builder.add_node("todo_llm", todo_llm)
     builder.add_node("execute_tools", execute_tools)
+    builder.add_node("web_search", web_search_node)
+    builder.add_node("chat_response_node", chat_response_node)
  
     # Entry: always classify first
     builder.set_entry_point("classify_intent")
@@ -56,6 +60,8 @@ async def build_graph(db_session_factory, store=None):
         "classify_intent",
         should_continue,
         {
+            "chat_response_node": "chat_response_node",
+            "web_search": "web_search",
             "ask_clarification": "ask_clarification",
             "todo_llm": "todo_llm",
         },
@@ -63,6 +69,10 @@ async def build_graph(db_session_factory, store=None):
  
     # After clarification, end the turn (wait for user response)
     builder.add_edge("ask_clarification", END)
+
+    # After web search, end the turn
+    builder.add_edge("web_search", END)
+    builder.add_edge("chat_response_node", END)
  
     # Route 2: after LLM call
     # - If has tool_calls → execute
@@ -124,9 +134,11 @@ async def run_agent(graph, user_id: str, telegram_id: str, chat_id: str, user_me
     """
     from langchain_core.messages import HumanMessage
 
+    print(f"Running agent for user_id={user_id}, telegram_id={telegram_id}, chat_id={chat_id}, message='{user_message}'")
+
     config = {
         "configurable": {
-            "thread_id": f"user_{telegram_id}",
+            "thread_id": f"user_{telegram_id}_{str(uuid.uuid4())}",
         },
         
         # "configurable": {"thread_id": thread_id},
@@ -152,6 +164,7 @@ async def run_agent(graph, user_id: str, telegram_id: str, chat_id: str, user_me
         "response_to_user": "",
         "confidence": 0.0,
         "ambiguous_fields": [],
+        "search_results": "",
     }
 
     result = await graph.ainvoke(input_state, config=config)
