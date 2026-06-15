@@ -6,7 +6,7 @@ import uuid
 from langgraph.graph import StateGraph, END
 
 from app.agent.state import AgentState
-from app.agent.nodes import make_nodes, should_continue, should_continue_llm
+from app.agent.nodes import make_nodes, should_continue, should_execute_tools, should_search_web_after_chat
 from app.agent.tools import make_todo_tools
 from app.config import get_settings
 import psycopg
@@ -72,14 +72,19 @@ async def build_graph(db_session_factory, store=None):
 
     # After web search, end the turn
     builder.add_edge("web_search", END)
-    builder.add_edge("chat_response_node", END)
+    # builder.add_edge("chat_response_node", END)
+    builder.add_conditional_edges(
+        "chat_response_node",
+        should_search_web_after_chat,
+        {
+            "web_search": "web_search",
+            "end": END,
+        },
+    )
  
-    # Route 2: after LLM call
-    # - If has tool_calls → execute
-    # - Else → end
     builder.add_conditional_edges(
         "todo_llm",
-        should_continue_llm,
+        should_execute_tools,
         {
             "execute_tools": "execute_tools",
             "end": END,

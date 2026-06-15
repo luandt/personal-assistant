@@ -32,3 +32,5 @@ class AgentState(TypedDict):
     ambiguous_fields: List[str] # which fields are unclear
 
     search_results: str
+
+    should_search_web: bool

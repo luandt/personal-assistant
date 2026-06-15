@@ -21,7 +21,7 @@ async def generate_store():
     """
     async with AsyncPostgresStore.from_conn_string(
         settings.database_url_sync,
-        index=IndexConfig(dims=1536, embed=embeddings, fields=["$"]),
+        index=IndexConfig(dims=1536, embed=embeddings, fields=["user_memory"]),
     ) as store:
         # Ensure tables/indexes exist on first run
         await store.setup()

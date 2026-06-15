@@ -12,9 +12,25 @@ from app.agent.state import AgentState
 from app.config import get_settings
 
 from tavily import TavilyClient
+from langgraph.store.base import BaseStore
+from langchain_core.messages import ToolMessage
+from pydantic import BaseModel, Field, model_validator
         
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+class ChatResponse(BaseModel):
+    should_search_web: bool = False
+    content: str = Field(default="", description="The assistant's reply to the user")
+    query: str = Field(default="", description="The search query for web search, if applicable")
+
+    @model_validator(mode="after")
+    def force_search_if_query_extracted(self) -> "ChatResponse":
+        """If the LLM extracted a search query, force should_search_web to True."""
+        if self.query.strip():
+            self.should_search_web = True
+            self.content = ""
+        return self
 
 SYSTEM_PROMPT = """You are a helpful personal assistant with access to a todo management system.
  
@@ -117,8 +133,25 @@ Important:
 - Answer in the language the user used.
 - If you do not understand the user's message, ask them to rephrase.
 - If the user expresses sadness, fear, death, or hopelessness, respond supportively and ask a gentle follow-up.
- """
- 
+
+Set should_search_web to TRUE if the user asks about ANY of the following:
+- Sports scores, match results, or game outcomes
+- Recent news or current events
+- Stock prices, crypto, or financial data
+- Weather
+- Anything that requires up-to-date or real-time information
+- Anything you are uncertain or unsure about
+
+IMPORTANT: If should_search_web is true, set content to an empty string "". Do NOT say things like 
+"I can't find that" or "let me look that up" — just set should_search_web to true and let the search handle it.
+
+You must always respond in the following JSON format:
+{
+  "content": "<your reply, or empty string if should_search_web is true>",
+  "should_search_web": <true or false>,
+  "query": "<optimized search query if should_search_web is true, otherwise empty string>"
+}"""
+
 def extract_text(content) -> str:
     """
     Safely extract plain text from an AIMessage content field.
@@ -259,7 +292,7 @@ def make_nodes(tools: list, llm_model: str = None):
             # Perform search
             results = client.search(
                 query=query,
-                include_domains=["vnexpress.net"],
+                include_domains=[],
                 max_results=5,  # Get top 5 results
                 include_answer=True  # Include AI-generated answer
             )
@@ -279,28 +312,31 @@ def make_nodes(tools: list, llm_model: str = None):
             "search_results": response_text,
         }
  
-    async def chat_response_node(state: AgentState) -> dict:
+    async def chat_response_node(state: AgentState, store: BaseStore) -> dict:
         """
         Generate a response for general chat messages (non-todo).
         """
-        print(f"messages list: {state['messages']}")
         user_message = state["messages"][-1].content if state["messages"] else ""
         
         prompt = CHAT_RESPONSE_PROMPT + f"\n\nUser: {user_message}\nPA:"
         messages = [SystemMessage(content=prompt)]
         
         logger.info(f"Generating chat response for: {repr(user_message[:80])}")
+
+        structured_llm = llm.with_structured_output(ChatResponse)
+        response = await structured_llm.ainvoke(messages)
         
-        response = await llm.ainvoke(messages)
-        
+        await write_memory(state, store, response.content)
         return {
-            "messages": [response],
+            "messages": [AIMessage(content=response.content)],
             "last_action": "chat_response_generated",
+            "should_search_web": response.should_search_web,
+            "entities": {"query": response.query} if response.should_search_web else {},
+
         }
     
     async def execute_tools(state: AgentState) -> dict:
         """Execute any tool calls requested by the LLM."""
-        from langchain_core.messages import ToolMessage
         
         last_message = state["messages"][-1]
         tool_results = []
@@ -362,12 +398,20 @@ def should_continue(state: AgentState) -> str:
     return "todo_llm"
  
  
-def should_continue_llm(state: AgentState) -> str:
+def should_execute_tools(state: AgentState) -> str:
     """Route after todo_llm: if tool_calls → execute, else → end."""
     messages = state["messages"]
     last_message = messages[-1]
     if hasattr(last_message, "tool_calls") and last_message.tool_calls:
         return "execute_tools"
+    return "end"
+
+def should_search_web_after_chat(state: AgentState) -> str:
+    """After a chat response, check if we should do a web search."""
+    last_message = state["messages"][-1]
+    if state.get("should_search_web"):
+        print(f"Routing to web search with query: {state.get('entities', {}).get('query', '')}")
+        return "web_search"
     return "end" 
 
 def format_tavily_results(query: str, results: dict) -> str:
@@ -410,3 +454,17 @@ def format_tavily_results(query: str, results: dict) -> str:
         lines.append("No results found.")
     
     return "\n".join(lines)
+
+async def write_memory(state: AgentState, store: BaseStore, response_content: str):
+    """ Store chat response"""
+    user_id = state.get("user_id", "")
+    namespace = ("memory", user_id)
+    key = "user_memory"
+    existing_memory = await store.aget(namespace, key)
+
+    if existing_memory:
+        existing_memory_content = existing_memory.value.get('memory')
+    else:
+        existing_memory_content = "No existing memory found."
+    
+    await store.aput(namespace, key, {"memory": response_content})
