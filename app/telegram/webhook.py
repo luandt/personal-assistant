@@ -2,6 +2,7 @@
 Telegram webhook handler.
 Receives updates from Telegram and routes them to the LangGraph agent.
 """
+import time
 import logging
 
 from pymupdf import message
@@ -24,6 +25,20 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 router = APIRouter()
+
+_RECENT_UPDATE_TTL_SECONDS = 300
+_active_update_ids: set[int] = set()
+_recent_update_ids: dict[int, float] = {}
+
+
+def _prune_recent_updates(now: float) -> None:
+    expired_ids = [
+        update_id
+        for update_id, expires_at in _recent_update_ids.items()
+        if expires_at <= now
+    ]
+    for update_id in expired_ids:
+        _recent_update_ids.pop(update_id, None)
 
 
 @router.get("/webhook-info")
@@ -65,106 +80,123 @@ async def telegram_webhook(request: Request):
     data = await request.json()
     logger.info(f"Received webhook update: {data}")
 
+    update_id = data.get("update_id")
+    now = time.monotonic()
+    _prune_recent_updates(now)
+
+    if isinstance(update_id, int):
+        if update_id in _active_update_ids or update_id in _recent_update_ids:
+            logger.info(f"Skipping duplicate webhook update: {update_id}")
+            return {"ok": True}
+        _active_update_ids.add(update_id)
+
     try:
-        update = Update.de_json(data, None)
-    except Exception as e:
-        logger.error(f"Failed to parse Telegram update: {e}")
-        raise HTTPException(status_code=400, detail="Invalid update")
-
-    # Only handle text messages
-    # if not update.message or not update.message.text:
-    #     return {"ok": True}
-    if not update.message or (not update.message.text and not update.message.voice):
-        return {"ok": True}
-
-    message = update.message
-    telegram_user = message.from_user
-    chat_id = message.chat_id
-
-    if message.voice:
         try:
-            await send_typing(chat_id)
-            file_path = await download_voice(message.voice.file_id)
-            text = await transcribe_voice(file_path)
-            os.unlink(file_path)  # clean up temp file
-            logger.info(f"Transcribed voice: {text}")
+            update = Update.de_json(data, None)
         except Exception as e:
-            logger.error(f"Voice transcription failed: {e}")
-            await send_message(chat_id, "Sorry, I couldn't understand your voice message.")
+            logger.error(f"Failed to parse Telegram update: {e}")
+            raise HTTPException(status_code=400, detail="Invalid update")
+
+        # Only handle text messages
+        # if not update.message or not update.message.text:
+        #     return {"ok": True}
+        if not update.message or (not update.message.text and not update.message.voice):
             return {"ok": True}
 
-    # Handle text message
-    elif message.text:
-        text = message.text.strip()
-    else:
-        return {"ok": True}
-        
-    # Ignore commands for now (can extend later)
-    if text.startswith("/start"):
-        logger.info(f"Received /start from user {telegram_user.id} (chat_id: {chat_id})")
-        try:
-            await send_message(chat_id, "👋 Hi! I'm your personal assistant. Tell me what to add to your todo list, or ask me anything!")
-            logger.info(f"Successfully sent /start response to chat_id {chat_id}")
-        except Exception as e:
-            logger.error(f"Failed to send /start message to chat_id {chat_id}: {e}", exc_info=True)
-        return {"ok": True}
+        message = update.message
+        telegram_user = message.from_user
+        chat_id = message.chat_id
 
-    if text.startswith("/help"):
-        logger.info(f"Received /help from user {telegram_user.id} (chat_id: {chat_id})")
-        help_text = (
-            "🤖 *Personal Assistant*\n\n"
-            "I understand natural language! Try:\n"
-            "• *'Add buy groceries tomorrow'*\n"
-            "• *'What do I have this week?'*\n"
-            "• *'Mark gym as done'*\n"
-            "• *'Remind me to call mom tomorrow 3pm'*\n"
-            "• *'Delete everything tagged #work'*\n"
-            "• *'Search for gym'*"
-        )
-        try:
-            await send_message(chat_id, help_text, parse_mode="Markdown")
-            logger.info(f"Successfully sent /help response to chat_id {chat_id}")
-        except Exception as e:
-            logger.error(f"Failed to send /help message to chat_id {chat_id}: {e}", exc_info=True)
-        return {"ok": True}
+        if message.voice:
+            try:
+                await send_typing(chat_id)
+                file_path = await download_voice(message.voice.file_id)
+                text = await transcribe_voice(file_path)
+                os.unlink(file_path)  # clean up temp file
+                logger.info(f"Transcribed voice: {text}")
+            except Exception as e:
+                logger.error(f"Voice transcription failed: {e}")
+                await send_message(chat_id, "Sorry, I couldn't understand your voice message.")
+                return {"ok": True}
 
-    # Show typing indicator
-    try:
-        await send_typing(chat_id)
-    except Exception as e:
-        logger.warning(f"Failed to send typing indicator: {e}")
+        # Handle text message
+        elif message.text:
+            text = message.text.strip()
+        else:
+            return {"ok": True}
+            
+        # Ignore commands for now (can extend later)
+        if text.startswith("/start"):
+            logger.info(f"Received /start from user {telegram_user.id} (chat_id: {chat_id})")
+            try:
+                await send_message(chat_id, "👋 Hi! I'm your personal assistant. Tell me what to add to your todo list, or ask me anything!")
+                logger.info(f"Successfully sent /start response to chat_id {chat_id}")
+            except Exception as e:
+                logger.error(f"Failed to send /start message to chat_id {chat_id}: {e}", exc_info=True)
+            return {"ok": True}
 
-    # Get or create user and run agent
-    try:
-        async with AsyncSessionLocal() as db:
-            user = await get_or_create_user(
-                db,
-                telegram_id=str(telegram_user.id),
-                username=telegram_user.username,
-                first_name=telegram_user.first_name,
+        if text.startswith("/help"):
+            logger.info(f"Received /help from user {telegram_user.id} (chat_id: {chat_id})")
+            help_text = (
+                "🤖 *Personal Assistant*\n\n"
+                "I understand natural language! Try:\n"
+                "• *'Add buy groceries tomorrow'*\n"
+                "• *'What do I have this week?'*\n"
+                "• *'Mark gym as done'*\n"
+                "• *'Remind me to call mom tomorrow 3pm'*\n"
+                "• *'Delete everything tagged #work'*\n"
+                "• *'Search for gym'*"
             )
-            await db.commit()
-            user_id = user.id
+            try:
+                await send_message(chat_id, help_text, parse_mode="Markdown")
+                logger.info(f"Successfully sent /help response to chat_id {chat_id}")
+            except Exception as e:
+                logger.error(f"Failed to send /help message to chat_id {chat_id}: {e}", exc_info=True)
+            return {"ok": True}
 
-        # Run agent
+        # Show typing indicator
         try:
-            graph = await get_graph()
-            response = await run_agent(
-                graph=graph,
-                user_id=user_id,
-                telegram_id=str(telegram_user.id),
-                chat_id=str(chat_id),
-                user_message=text,
-            )
-            await send_message(chat_id, response)
+            await send_typing(chat_id)
         except Exception as e:
-            logger.exception(f"Agent error for user {telegram_user.id}: {e}")
-            await send_message(chat_id, "Sorry, something went wrong. Please try again.")
-    except Exception as e:
-        logger.error(f"Database/agent error for user {telegram_user.id}: {e}", exc_info=True)
-        await send_message(chat_id, "Sorry, I'm having trouble accessing my memory right now. Please try again later.")
+            logger.warning(f"Failed to send typing indicator: {e}")
 
-    return {"ok": True}
+        # Get or create user and run agent
+        try:
+            async with AsyncSessionLocal() as db:
+                user = await get_or_create_user(
+                    db,
+                    telegram_id=str(telegram_user.id),
+                    username=telegram_user.username,
+                    first_name=telegram_user.first_name,
+                )
+                await db.commit()
+                user_id = user.id
+
+            # Run agent
+            try:
+                graph = await get_graph()
+                response = await run_agent(
+                    graph=graph,
+                    user_id=user_id,
+                    telegram_id=str(telegram_user.id),
+                    chat_id=str(chat_id),
+                    user_message=text,
+                )
+                await send_message(chat_id, response)
+            except Exception as e:
+                logger.exception(f"Agent error for user {telegram_user.id}: {e}")
+                await send_message(chat_id, "Sorry, something went wrong. Please try again.")
+        except Exception as e:
+            logger.error(f"Database/agent error for user {telegram_user.id}: {e}", exc_info=True)
+            await send_message(chat_id, "Sorry, I'm having trouble accessing my memory right now. Please try again later.")
+
+        return {"ok": True}
+    finally:
+        if isinstance(update_id, int):
+            _active_update_ids.discard(update_id)
+            _recent_update_ids[update_id] = time.monotonic() + _RECENT_UPDATE_TTL_SECONDS
+
+    
 
 async def transcribe_voice(file_path: str) -> str:
     """Transcribe using Groq Whisper API (free tier)."""

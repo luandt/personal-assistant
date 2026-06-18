@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     # Tavily API key (required for web search)
     tavily_api_key: str = ""
 
+    google_credentials_file: str = "./gcp-oauth.keys.json"
+    google_calendar_enabled: bool = True
+
 
     class Config:
         env_file = ".env"

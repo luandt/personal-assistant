@@ -65,12 +65,12 @@ def start_scheduler():
         replace_existing=True,
         max_instances=1,
     )
-    scheduler.start()
-    logger.info("Reminder scheduler started.")
+    # scheduler.start()
+    # logger.info("Reminder scheduler started.")
 
 
 def stop_scheduler():
     """Stop the scheduler gracefully."""
     if scheduler.running:
         scheduler.shutdown(wait=False)
-        logger.info("Reminder scheduler stopped.")
+        # logger.info("Reminder scheduler stopped.")

@@ -34,3 +34,9 @@ class AgentState(TypedDict):
     search_results: str
 
     should_search_web: bool
+
+    # --- calendar fields ---
+    has_calendar_conflict: bool          # Was a conflict found?
+    calendar_conflicts: List[dict]       # Raw conflict event objects
+    calendar_check_done: bool            # Have we checked yet?
+    awaiting_conflict_confirmation: bool # Waiting for user yes/no?

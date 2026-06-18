@@ -62,7 +62,7 @@ async def lifespan(app: FastAPI):
 
     # 4. Start reminder scheduler
     try:
-        start_scheduler()
+        # start_scheduler()
         logger.info("Reminder scheduler started.")
     except Exception as e:
         logger.warning(f"Failed to start reminder scheduler: {e}")
