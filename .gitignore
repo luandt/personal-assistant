@@ -10,3 +10,5 @@ dist/
 build/
 .pytest_cache/
 .mypy_cache/
+gcp-oauth.keys.json
+tokens.json
