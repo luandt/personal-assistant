@@ -3,10 +3,10 @@ Node functions for the LangGraph agent graph.
 Each node receives AgentState and returns a partial state update.
 """
 import json
+import os
 from typing import Any
 import logging
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
 from app.agent import state
 from app.agent.prompt import SYSTEM_PROMPT, INTENT_CLASSIFICATION_PROMPT, CHAT_RESPONSE_PROMPT
@@ -23,6 +23,56 @@ from zoneinfo import ZoneInfo
         
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+class LLMConfigurationError(ValueError):
+    """Raised when LLM provider/model configuration is invalid."""
+
+
+def _build_chat_llm(provider: str, model_name: str):
+    provider_name = (provider or "").strip().lower()
+    kwargs = {"model": model_name, "temperature": 0, "max_tokens": 4096}
+
+    try:
+        if provider_name == "anthropic":
+            from langchain_anthropic import ChatAnthropic
+
+            os.environ.setdefault("ANTHROPIC_API_KEY", settings.anthropic_api_key)
+            return ChatAnthropic(**kwargs)
+
+        if provider_name == "openai":
+            from langchain_openai import ChatOpenAI
+
+            os.environ.setdefault("OPENAI_API_KEY", settings.openai_api_key)
+            return ChatOpenAI(**kwargs)
+
+        if provider_name == "gemini":
+            from langchain_google_genai import ChatGoogleGenerativeAI
+
+            os.environ.setdefault("GOOGLE_API_KEY", settings.gemini_api_key)
+            return ChatGoogleGenerativeAI(**kwargs)
+
+        if provider_name == "nvidia":
+            from langchain_nvidia_ai_endpoints import ChatNVIDIA
+
+            os.environ.setdefault("NVIDIA_API_KEY", settings.nvidia_api_key)
+            if settings.nvidia_api_endpoint:
+                os.environ.setdefault("NVIDIA_API_ENDPOINT", settings.nvidia_api_endpoint)
+            return ChatNVIDIA(**kwargs)
+
+        raise LLMConfigurationError(
+            f"Unsupported llm_provider '{provider_name}'. Expected one of: nvidia, anthropic, openai, gemini"
+        )
+    except LLMConfigurationError:
+        raise
+    except ImportError as exc:
+        raise LLMConfigurationError(
+            f"Missing dependency for provider '{provider_name}'. Install required LangChain package."
+        ) from exc
+    except Exception as exc:
+        raise LLMConfigurationError(
+            f"Failed to initialize provider '{provider_name}' with model '{model_name}': {exc}"
+        ) from exc
 
 ALLOWED_INTENTS = {"create", "list", "update", "delete", "search", "chat", "web_search"}
 CONFIRM_POSITIVE = {"yes", "y", "yeah", "yep", "ok", "sure", "confirm"}
@@ -126,16 +176,13 @@ def extract_text(content) -> str:
     return str(content).strip()
  
  
-def make_nodes(tools: list, llm_model: str = None):
+def make_nodes(tools: list, llm_model: str = None, llm_provider: str = None):
     """
     Returns node functions bound to the given tools and LLM.
     """
     model_name = llm_model or settings.llm_model
-    llm = ChatNVIDIA(
-        model=model_name,
-        temperature=0,
-        max_tokens=4096,
-    ).bind_tools(tools)
+    provider_name = llm_provider or settings.llm_provider
+    llm = _build_chat_llm(provider_name, model_name).bind_tools(tools)
  
     async def classify_intent(state: AgentState) -> dict:
         """

@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from app.config import get_settings
 from app.db.session import init_db, AsyncSessionLocal
 from app.agent.graph import build_graph
+from app.agent.nodes import LLMConfigurationError
 from app.agent.store import generate_store
 from app.telegram.webhook import router as webhook_router
 from app.scheduler.reminders import start_scheduler, stop_scheduler
@@ -45,6 +46,9 @@ async def lifespan(app: FastAPI):
         store = await store_cm.__aenter__()
         await build_graph(db_session_factory=AsyncSessionLocal, store=store)
         logger.info("LangGraph agent built with custom store.")
+    except LLMConfigurationError as e:
+        logger.error(f"Invalid LLM configuration: {e}")
+        raise RuntimeError(f"Invalid LLM configuration: {e}") from e
     except Exception as e:
         logger.error(f"Failed to build LangGraph agent: {e}")
         logger.warning("Continuing startup. Agent features will be unavailable.")

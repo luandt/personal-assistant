@@ -11,7 +11,7 @@ A Telegram-based personal assistant with intelligent Todo management, powered by
 | Messaging | python-telegram-bot |
 | API Server | FastAPI |
 | Agent Framework | LangGraph |
-| LLM | Claude Sonnet (Anthropic) |
+| LLM | Anthropic / OpenAI / Gemini / NVIDIA (configurable) |
 | Persistence | PostgreSQL + SQLAlchemy |
 | Caching / Queue | Redis |
 | Scheduler | APScheduler |
@@ -31,7 +31,13 @@ cp .env.example .env
 Required values in `.env`:
 - `TELEGRAM_BOT_TOKEN` — from [@BotFather](https://t.me/BotFather)
 - `TELEGRAM_WEBHOOK_URL` — your public HTTPS URL (e.g. from Railway/Fly.io)
-- `ANTHROPIC_API_KEY` — from [console.anthropic.com](https://console.anthropic.com)
+- `LLM_PROVIDER` — one of: `anthropic`, `openai`, `gemini`, `nvidia`
+- `LLM_MODEL` — provider-specific model name (example: `claude-sonnet-4-20250514`)
+- Provider API key for the selected provider:
+  - `ANTHROPIC_API_KEY` — from [console.anthropic.com](https://console.anthropic.com)
+  - `OPENAI_API_KEY` — from [platform.openai.com](https://platform.openai.com)
+  - `GEMINI_API_KEY` — from [aistudio.google.com](https://aistudio.google.com)
+  - `NVIDIA_API_KEY` — from [build.nvidia.com](https://build.nvidia.com)
 
 ### 2. Run with Docker Compose
 
@@ -103,7 +109,7 @@ personal-assistant/
 User message → FastAPI webhook
   → get_or_create_user
   → LangGraph agent (thread per user, checkpointed in Postgres)
-      → Claude LLM reasons + decides tools
+      → Configured LLM provider reasons + decides tools
       → Executes todo tools (create / list / update / delete / search / remind)
       → Loops until done
       → Returns natural language response
