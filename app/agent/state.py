@@ -11,7 +11,6 @@ class TodoItem(TypedDict):
     status: str     # pending / in_progress / done
     tags: List[str]
 
-
 class AgentState(TypedDict):
     # Conversation
     messages: Annotated[list, add_messages]

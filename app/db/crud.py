@@ -7,7 +7,6 @@ from app.db.models import User, Todo, Priority, TodoStatus
 
 logger = logging.getLogger(__name__)
 
-
 # ── Users ──────────────────────────────────────────────────────────────────
 
 async def get_or_create_user(db: AsyncSession, telegram_id: str, username: str = None, first_name: str = None) -> User:
@@ -22,7 +21,6 @@ async def get_or_create_user(db: AsyncSession, telegram_id: str, username: str =
         await db.flush()
     return user
 
-
 async def get_user_by_telegram_id(db: AsyncSession, telegram_id: str) -> Optional[User]:
     query = select(User).where(User.telegram_id == telegram_id)
     logger.debug("Executing query: %s", query)
@@ -30,7 +28,6 @@ async def get_user_by_telegram_id(db: AsyncSession, telegram_id: str) -> Optiona
     user = result.scalar_one_or_none()
     logger.debug("Query result: %s", user)
     return user
-
 
 # ── Todos ──────────────────────────────────────────────────────────────────
 
@@ -55,7 +52,6 @@ async def create_todo(
     await db.flush()
     await db.refresh(todo)
     return todo
-
 
 async def list_todos(
     db: AsyncSession,
@@ -92,7 +88,6 @@ async def list_todos(
 
     return todos
 
-
 async def get_todo(db: AsyncSession, todo_id: str, user_id: str) -> Optional[Todo]:
     query = select(Todo).where(and_(Todo.id == todo_id, Todo.user_id == user_id))
     logger.debug("Executing query: %s", query)
@@ -100,7 +95,6 @@ async def get_todo(db: AsyncSession, todo_id: str, user_id: str) -> Optional[Tod
     todo = result.scalar_one_or_none()
     logger.debug("Query result: %s", todo)
     return todo
-
 
 async def update_todo(
     db: AsyncSession,
@@ -135,7 +129,6 @@ async def delete_todo(db: AsyncSession, todo_id: str, user_id: str) -> bool:
     await db.flush()
     return True
 
-
 async def delete_todos_by_tag(db: AsyncSession, user_id: str, tag: str) -> int:
     query = select(Todo).where(Todo.user_id == user_id)
     logger.debug("Executing query: %s", query)
@@ -149,7 +142,6 @@ async def delete_todos_by_tag(db: AsyncSession, user_id: str, tag: str) -> int:
             count += 1
     await db.flush()
     return count
-
 
 async def search_todos(db: AsyncSession, user_id: str, query: str) -> List[Todo]:
     q = f"%{query.lower()}%"
@@ -167,7 +159,6 @@ async def search_todos(db: AsyncSession, user_id: str, query: str) -> List[Todo]
     todos = result.scalars().all()
     logger.debug("Query result: %s todos", len(todos))
     return todos
-
 
 async def get_due_reminders(db: AsyncSession, before: datetime) -> List[Todo]:
     """Get todos with due_date <= before that haven't had reminders sent."""

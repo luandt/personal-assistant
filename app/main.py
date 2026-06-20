@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown logic."""
@@ -85,7 +84,6 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Failed to shut down custom store: {e}")
     stop_scheduler()
 
-
 app = FastAPI(
     title="Personal Assistant",
     description="Telegram-based personal assistant with AI-powered todo management",
@@ -96,11 +94,9 @@ app = FastAPI(
 # Include routers
 app.include_router(webhook_router)
 
-
 @app.get("/")
 async def root():
     return {"status": "ok", "service": "personal-assistant"}
-
 
 @app.get("/health")
 async def health():

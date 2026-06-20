@@ -11,7 +11,6 @@ settings = get_settings()
 # Initialize embeddings service (adjust model as needed via env/settings)
 embeddings = NVIDIAEmbeddings(model="nv-embedqa-e5-v5")
 
-
 @contextlib.asynccontextmanager
 async def generate_store():
     """Async context manager that yields an AsyncPostgresStore configured for semantic search.

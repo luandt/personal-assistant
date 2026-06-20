@@ -52,9 +52,6 @@ async def build_graph(db_session_factory, store=None):
     """
     global _compiled_graph
 
-    # Create tools bound to the DB session factory
-    # tools = make_todo_tools(db_session_factory)
-
     # ── 1. Todo tools (existing) ───────────────────────────────
     todo_tools = make_todo_tools(db_session_factory)
 

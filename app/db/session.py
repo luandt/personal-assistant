@@ -25,12 +25,10 @@ sync_engine = create_engine(
     pool_pre_ping=True,
 )
 
-
 async def init_db():
     """Create all tables."""
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-
 
 async def get_db() -> AsyncSession:
     """Dependency for FastAPI routes."""

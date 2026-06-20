@@ -7,16 +7,13 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 import enum
 import uuid
 
-
 class Base(DeclarativeBase):
     pass
-
 
 class Priority(str, enum.Enum):
     low = "low"
     medium = "medium"
     high = "high"
-
 
 class TodoStatus(str, enum.Enum):
     pending = "pending"
@@ -44,10 +41,8 @@ class TodoStatus(str, enum.Enum):
                 return cls(normalized)
         return super()._missing_(value)
 
-
 def gen_uuid() -> str:
     return str(uuid.uuid4())
-
 
 class User(Base):
     __tablename__ = "users"
@@ -61,7 +56,6 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
     todos: Mapped[List["Todo"]] = relationship("Todo", back_populates="user", cascade="all, delete-orphan")
-
 
 class Todo(Base):
     __tablename__ = "todos"

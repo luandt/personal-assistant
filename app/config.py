@@ -2,7 +2,6 @@ from pydantic_settings import BaseSettings
 from functools import lru_cache
 from pydantic import model_validator
 
-
 class Settings(BaseSettings):
     # Telegram
     telegram_bot_token: str = ""
@@ -73,7 +72,6 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         extra = "ignore"
-
 
 @lru_cache()
 def get_settings() -> Settings:

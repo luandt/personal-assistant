@@ -117,7 +117,6 @@ PROFILE_SIGNAL_PATTERNS = [
     r"\bi'm into\b",
 ]
 
-
 class Profile(BaseModel):
     """Structured profile memory for the user."""
 
@@ -128,11 +127,9 @@ class Profile(BaseModel):
     interests: list[str] = Field(default_factory=list, description="Interests or hobbies")
     preferences: list[str] = Field(default_factory=list, description="User preferences")
 
-
 def _has_profile_signals(message: str) -> bool:
     lowered = (message or "").lower()
     return any(re.search(pattern, lowered) for pattern in PROFILE_SIGNAL_PATTERNS)
-
 
 def _format_profile_context(profile_items) -> str:
     if not profile_items:
@@ -151,10 +148,8 @@ def _format_profile_context(profile_items) -> str:
             lines.append(str(value))
     return "\n".join(lines)
 
-
 def _first_clause(value: str) -> str:
     return re.split(r"[.?!]", value, maxsplit=1)[0].strip()
-
 
 def _normalize_list_values(raw_value: str) -> list[str]:
     values = []
@@ -165,7 +160,6 @@ def _normalize_list_values(raw_value: str) -> list[str]:
         if cleaned and cleaned not in values:
             values.append(cleaned)
     return values
-
 
 def _extract_profile_update(user_message: str) -> dict:
     message = (user_message or "").strip()
@@ -227,7 +221,6 @@ def _extract_profile_update(user_message: str) -> dict:
 
     return update
 
-
 def _merge_profile(existing_profile: dict | None, profile_update: dict) -> dict:
     merged = dict(existing_profile or {})
     for key, value in profile_update.items():
@@ -240,7 +233,6 @@ def _merge_profile(existing_profile: dict | None, profile_update: dict) -> dict:
             merged[key] = value
     return merged
 
-
 def _fallback_intent_response() -> dict:
     return {
         "intent": "chat",
@@ -250,7 +242,6 @@ def _fallback_intent_response() -> dict:
         "clarification_needed": True,
         "clarification_question": "I'm not sure what you meant. Can you rephrase?",
     }
-
 
 def _validate_intent_payload(intent_data: dict[str, Any]) -> dict:
     intent = intent_data.get("intent")
@@ -317,7 +308,6 @@ def extract_text(content) -> str:
         return " ".join(parts).strip()
     return str(content).strip()
 
-
 async def load_profile_context(store: BaseStore, user_id: str) -> str:
     """Load profile memory for prompt conditioning."""
     if not store or not user_id:
@@ -331,7 +321,6 @@ async def load_profile_context(store: BaseStore, user_id: str) -> str:
         return ""
 
     return _format_profile_context([profile_item] if profile_item else [])
- 
  
 def make_nodes(tools: list, llm_model: str = None, llm_provider: str = None):
     """
@@ -499,10 +488,6 @@ def make_nodes(tools: list, llm_model: str = None, llm_provider: str = None):
                 "entities": {},
             }
 
-        # try:
-        #     await write_memory(state, store, response.content)
-        # except Exception as e:
-        #     logger.warning(f"Memory write failed (non-blocking): {e}")
 
         return {
             "messages": [AIMessage(content=response.content)],
@@ -794,7 +779,6 @@ def make_nodes(tools: list, llm_model: str = None, llm_provider: str = None):
         }
     return classify_intent, ask_clarification, todo_llm, execute_tools, web_search_node, chat_response_node, update_profile_node, check_calendar_node, ask_calendar_confirmation
  
- 
 def messages_router(state: AgentState) -> str:
     """
     Route after classify_intent:
@@ -842,7 +826,6 @@ def messages_router(state: AgentState) -> str:
     
     logger.info(f"Adequate confidence ({confidence:.2f}) - proceeding to LLM")
     return "todo_llm"
- 
  
 def should_execute_tools(state: AgentState) -> str:
     """Route after todo_llm: if tool_calls → execute, else → end."""
@@ -905,17 +888,3 @@ def format_tavily_results(query: str, results: dict) -> str:
         lines.append("No results found.")
     
     return "\n".join(lines)
-
-async def write_memory(state: AgentState, store: BaseStore, response_content: str):
-    """ Store chat response"""
-    user_id = state.get("user_id", "")
-    namespace = ("memory", user_id)
-    key = "user_memory"
-    existing_memory = await store.aget(namespace, key)
-
-    if existing_memory:
-        existing_memory_content = existing_memory.value.get('memory')
-    else:
-        existing_memory_content = "No existing memory found."
-    
-    await store.aput(namespace, key, {"memory": response_content})
