@@ -4,21 +4,22 @@ Each node receives AgentState and returns a partial state update.
 """
 import json
 import os
-from typing import Any
+import re
+from datetime import datetime, timedelta
+from typing import Any, Optional
 import logging
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, merge_message_runs
 
 from app.agent import state
 from app.agent.prompt import SYSTEM_PROMPT, INTENT_CLASSIFICATION_PROMPT, CHAT_RESPONSE_PROMPT
 from app.agent.state import AgentState
 from app.config import get_settings
+from pydantic import BaseModel, Field, model_validator
 
 from tavily import TavilyClient
 from langgraph.store.base import BaseStore
 from langchain_core.messages import ToolMessage
-from pydantic import BaseModel, Field, model_validator
 import dateparser, json
-from datetime import timedelta
 from zoneinfo import ZoneInfo
         
 logger = logging.getLogger(__name__)
@@ -74,7 +75,7 @@ def _build_chat_llm(provider: str, model_name: str):
             f"Failed to initialize provider '{provider_name}' with model '{model_name}': {exc}"
         ) from exc
 
-ALLOWED_INTENTS = {"create", "list", "update", "delete", "search", "chat", "web_search"}
+ALLOWED_INTENTS = {"create", "list", "update", "delete", "search", "chat", "web_search", "update_profile"}
 CONFIRM_POSITIVE = {"yes", "y", "yeah", "yep", "ok", "sure", "confirm"}
 CONFIRM_NEGATIVE = {"no", "n", "nope", "cancel", "stop"}
 CONFIRM_REPLIES = CONFIRM_POSITIVE | CONFIRM_NEGATIVE
@@ -97,6 +98,147 @@ CALENDAR_READ_ONLY_TOOL_NAMES = {
 }
 CALENDAR_TIMEZONE = "Asia/Ho_Chi_Minh"
 CALENDAR_TZ = ZoneInfo(CALENDAR_TIMEZONE)
+PROFILE_NAMESPACE = "profile"
+PROFILE_SIGNAL_PATTERNS = [
+    r"\bmy name is\b",
+    r"\bi am\b",
+    r"\bi'm\b",
+    r"\bim\b",
+    r"\bi live in\b",
+    r"\bi work as\b",
+    r"\bi work in\b",
+    r"\bi like\b",
+    r"\bi love\b",
+    r"\bi enjoy\b",
+    r"\bi prefer\b",
+    r"\bfavorite\b",
+    r"\bmy hobby\b",
+    r"\bmy hobbies\b",
+    r"\bi'm into\b",
+]
+
+
+class Profile(BaseModel):
+    """Structured profile memory for the user."""
+
+    name: Optional[str] = Field(default=None, description="The user's name")
+    location: Optional[str] = Field(default=None, description="The user's location")
+    job: Optional[str] = Field(default=None, description="The user's job")
+    connections: list[str] = Field(default_factory=list, description="Family, friends, or coworkers")
+    interests: list[str] = Field(default_factory=list, description="Interests or hobbies")
+    preferences: list[str] = Field(default_factory=list, description="User preferences")
+
+
+def _has_profile_signals(message: str) -> bool:
+    lowered = (message or "").lower()
+    return any(re.search(pattern, lowered) for pattern in PROFILE_SIGNAL_PATTERNS)
+
+
+def _format_profile_context(profile_items) -> str:
+    if not profile_items:
+        return ""
+
+    lines = []
+    for item in profile_items:
+        value = item.value
+        if isinstance(value, dict):
+            parts = []
+            for key in ("name", "location", "job", "connections", "interests", "preferences"):
+                if value.get(key):
+                    parts.append(f"{key}: {value[key]}")
+            lines.append("; ".join(parts) if parts else json.dumps(value, ensure_ascii=False))
+        else:
+            lines.append(str(value))
+    return "\n".join(lines)
+
+
+def _first_clause(value: str) -> str:
+    return re.split(r"[.?!]", value, maxsplit=1)[0].strip()
+
+
+def _normalize_list_values(raw_value: str) -> list[str]:
+    values = []
+    for piece in re.split(r",|\band\b|&|/", raw_value, flags=re.IGNORECASE):
+        cleaned = piece.strip().strip(".?!;:")
+        cleaned = re.sub(r"^(a|an|the)\s+", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip().lower()
+        if cleaned and cleaned not in values:
+            values.append(cleaned)
+    return values
+
+
+def _extract_profile_update(user_message: str) -> dict:
+    message = (user_message or "").strip()
+    if not message:
+        return {}
+
+    lowered = message.lower()
+    update: dict[str, Any] = {}
+
+    name_match = re.search(r"\bmy name is\s+(?P<value>.+)", lowered)
+    if name_match:
+        update["name"] = _first_clause(name_match.group("value")).title()
+
+    location_match = re.search(r"\bi live in\s+(?P<value>.+)", lowered)
+    if location_match:
+        update["location"] = _first_clause(location_match.group("value")).title()
+
+    job_match = re.search(r"\bi work as\s+(?P<value>.+)", lowered)
+    if not job_match:
+        job_match = re.search(r"\bi work in\s+(?P<value>.+)", lowered)
+    if job_match:
+        update["job"] = _first_clause(job_match.group("value")).strip()
+
+    hobby_patterns = [
+        r"\bmy hobby is\s+(?P<value>.+)",
+        r"\bmy hobbies are\s+(?P<value>.+)",
+        r"\bi like\s+(?P<value>.+)",
+        r"\bi love\s+(?P<value>.+)",
+        r"\bi enjoy\s+(?P<value>.+)",
+        r"\bi(?:'|)m into\s+(?P<value>.+)",
+    ]
+    hobby_values: list[str] = []
+    for pattern in hobby_patterns:
+        match = re.search(pattern, lowered)
+        if match:
+            hobby_values.extend(_normalize_list_values(_first_clause(match.group("value"))))
+    if hobby_values:
+        update["interests"] = hobby_values
+
+    preference_patterns = [
+        r"\bi prefer\s+(?P<value>.+)",
+        r"\bmy favorite (?P<label>.+?) is\s+(?P<value>.+)",
+        r"\bmy favourite (?P<label>.+?) is\s+(?P<value>.+)",
+    ]
+    preference_values: list[str] = []
+    for pattern in preference_patterns:
+        match = re.search(pattern, lowered)
+        if not match:
+            continue
+        if "label" in match.groupdict():
+            label = _first_clause(match.group("label")).strip()
+            value = _first_clause(match.group("value")).strip()
+            if label and value:
+                preference_values.append(f"{label}: {value}")
+        else:
+            preference_values.extend(_normalize_list_values(_first_clause(match.group("value"))))
+    if preference_values:
+        update["preferences"] = preference_values
+
+    return update
+
+
+def _merge_profile(existing_profile: dict | None, profile_update: dict) -> dict:
+    merged = dict(existing_profile or {})
+    for key, value in profile_update.items():
+        if value in (None, "", []):
+            continue
+        existing_value = merged.get(key)
+        if isinstance(existing_value, list) and isinstance(value, list):
+            merged[key] = existing_value + [item for item in value if item not in existing_value]
+        else:
+            merged[key] = value
+    return merged
 
 
 def _fallback_intent_response() -> dict:
@@ -174,6 +316,21 @@ def extract_text(content) -> str:
         ]
         return " ".join(parts).strip()
     return str(content).strip()
+
+
+async def load_profile_context(store: BaseStore, user_id: str) -> str:
+    """Load profile memory for prompt conditioning."""
+    if not store or not user_id:
+        return ""
+
+    try:
+        profile_item = await store.aget((PROFILE_NAMESPACE, user_id), "user_profile")
+        logger.info(f"Loaded profile memory for user_id={user_id}: {profile_item}")
+    except Exception as exc:
+        logger.error(f"Profile memory load failed: {exc}")
+        return ""
+
+    return _format_profile_context([profile_item] if profile_item else [])
  
  
 def make_nodes(tools: list, llm_model: str = None, llm_provider: str = None):
@@ -183,8 +340,7 @@ def make_nodes(tools: list, llm_model: str = None, llm_provider: str = None):
     model_name = llm_model or settings.llm_model
     provider_name = llm_provider or settings.llm_provider
     llm = _build_chat_llm(provider_name, model_name).bind_tools(tools)
- 
-    async def classify_intent(state: AgentState) -> dict:
+    async def classify_intent(state: AgentState, store: BaseStore) -> dict:
         """
         Explicitly classify the user's intent and extract entities.
         Returns confidence score and detects ambiguity early.
@@ -193,8 +349,12 @@ def make_nodes(tools: list, llm_model: str = None, llm_provider: str = None):
         awaiting = state.get("awaiting_conflict_confirmation", False)
         normalized_message = user_message.strip().lower()
         keep_confirmation_mode = awaiting and normalized_message in CONFIRM_REPLIES
+
+        user_id = state.get("user_id", "")
+        profile_context = await load_profile_context(store, user_id, )
+
         
-        prompt = INTENT_CLASSIFICATION_PROMPT.format(user_message=user_message)
+        prompt = INTENT_CLASSIFICATION_PROMPT.format(user_message=user_message, profile_context=profile_context or "none")
         messages = [SystemMessage(content=prompt)]
         
         logger.info(f"Classifying intent for: {repr(user_message[:80])}")
@@ -315,8 +475,13 @@ def make_nodes(tools: list, llm_model: str = None, llm_provider: str = None):
         Generate a response for general chat messages (non-todo).
         """
         user_message = state["messages"][-1].content if state["messages"] else ""
-        
-        prompt = CHAT_RESPONSE_PROMPT + f"\n\nUser: {user_message}\nPA:"
+        user_id = state.get("user_id", "")
+
+        profile_context = await load_profile_context(store, user_id)
+        prompt = CHAT_RESPONSE_PROMPT
+        if profile_context:
+            prompt += f"\n\nUser profile memory:\n{profile_context}"
+        prompt += f"\n\nUser: {user_message}\nPA:"
         messages = [SystemMessage(content=prompt)]
         
         logger.info(f"Generating chat response for: {repr(user_message[:80])}")
@@ -334,10 +499,10 @@ def make_nodes(tools: list, llm_model: str = None, llm_provider: str = None):
                 "entities": {},
             }
 
-        try:
-            await write_memory(state, store, response.content)
-        except Exception as e:
-            logger.warning(f"Memory write failed (non-blocking): {e}")
+        # try:
+        #     await write_memory(state, store, response.content)
+        # except Exception as e:
+        #     logger.warning(f"Memory write failed (non-blocking): {e}")
 
         return {
             "messages": [AIMessage(content=response.content)],
@@ -346,6 +511,41 @@ def make_nodes(tools: list, llm_model: str = None, llm_provider: str = None):
             "entities": {"query": response.query} if response.should_search_web else {},
             "awaiting_conflict_confirmation": False,
         }
+
+    async def update_profile_node(state: AgentState, store: BaseStore) -> dict:
+        """Update profile memory from self-introductions and preference statements."""
+        user_message = state["messages"][-1].content if state.get("messages") else ""
+        user_id = state.get("user_id", "")
+
+        if not user_message or not user_id:
+            return {"last_action": "profile_memory_skipped"}
+
+        if not _has_profile_signals(user_message):
+            return {"last_action": "profile_memory_skipped"}
+
+        profile_update = _extract_profile_update(user_message)
+        if not profile_update:
+            return {"last_action": "profile_memory_skipped"}
+
+        namespace = (PROFILE_NAMESPACE, user_id)
+
+        try:
+            existing_item = await store.aget(namespace, "user_profile")
+            existing_profile = existing_item.value if existing_item else None
+        except Exception as exc:
+            logger.error(f"Profile memory load failed: {exc}")
+            existing_profile = None
+
+        merged_profile = _merge_profile(existing_profile, profile_update)
+
+        try:
+            await store.aput(namespace, "user_profile", merged_profile)
+        except Exception as exc:
+            logger.warning(f"Profile memory update failed: {exc}")
+            return {"last_action": "profile_memory_failed"}
+
+        logger.info(f"Profile memory updated for user_id={user_id}: {list(profile_update.keys())}")
+        return {"last_action": "profile_memory_updated"}
     
     async def execute_tools(state: AgentState) -> dict:
         """Execute any tool calls requested by the LLM."""
@@ -592,7 +792,7 @@ def make_nodes(tools: list, llm_model: str = None, llm_provider: str = None):
             "last_action": "calendar_confirmation_asked",
             "awaiting_conflict_confirmation": True,
         }
-    return classify_intent, ask_clarification, todo_llm, execute_tools, web_search_node, chat_response_node, check_calendar_node, ask_calendar_confirmation
+    return classify_intent, ask_clarification, todo_llm, execute_tools, web_search_node, chat_response_node, update_profile_node, check_calendar_node, ask_calendar_confirmation
  
  
 def messages_router(state: AgentState) -> str:
@@ -631,6 +831,10 @@ def messages_router(state: AgentState) -> str:
     if intent == "chat":
         logger.info("Chat intent detected")
         return "chat_response_node"
+
+    if intent == "update_profile":
+        logger.info("Profile update intent detected")
+        return "update_profile_node"
     
     if intent == "web_search":
         logger.info("Web search intent detected")
