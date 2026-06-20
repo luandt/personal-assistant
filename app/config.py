@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     database_url_sync: str = "postgresql://postgres:postgres@localhost:5432/assistant"
 
     # Redis
-    redis_url: str = "redis://localhost:6379/0"
+    # redis_url: str = "redis://localhost:6379/0"
 
     # App
     app_env: str = "development"

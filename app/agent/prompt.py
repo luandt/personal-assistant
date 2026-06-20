@@ -24,10 +24,11 @@ Current user_id: {user_id}
 """
  
 INTENT_CLASSIFICATION_PROMPT = """Analyze this user message and extract the intent.
- 
+User profile context: {profile_context}
+
 Return ONLY a valid JSON object, no other text:
 {{
-  "intent": "create|list|update|delete|search|chat|web_search",
+  "intent": "create|list|update|delete|search|chat|web_search|update_profile",
   "confidence": 0.0-1.0,
   "entities": {{}},
   "ambiguous_fields": [],
@@ -59,17 +60,43 @@ FOR SEARCH intent:
 FOR CHAT intent:
     - no specific entities, just general conversation
 
-FOR WEB_SEARCH intent (web search):
-  - query: the web search question as-is
-  Example: "What's the weather in Ho Chi Minh City?" → 
-    {{"intent": "web_search", "query": "weather Ho Chi Minh City", "confidence": 0.95}}
-  Example: "Who won World Cup 2024?" → 
-    {{"intent": "web_search", "query": "World Cup 2024 winner", "confidence": 0.92}}
+FOR UPDATE_PROFILE intent:
+  - use when the user shares profile facts about themselves
+  - examples: name, location, job, hobbies, interests, preferences, personal connections
+  - entities can be empty
+
+FOR WEB_SEARCH intent:
+  - query: the web search question, ENRICHED with relevant profile context
+  
+  Rules for enrichment:
+  - If the question relates to the user's interests/hobbies/preferences 
+    (e.g. food, restaurants, activities, places), incorporate the relevant 
+    preference into the query for more targeted results.
+  - If profile context is "none" or unrelated to the question, use the 
+    question as-is — do NOT force irrelevant preferences into the query.
+  
+  Example (profile has "interests: sushi, japanese food"):
+    "What's the best restaurant in HCM city?" →
+      {{"intent": "web_search", "entities": {{"query": "best sushi restaurant Ho Chi Minh City"}}, "confidence": 0.95}}
+  
+  Example (profile has "interests: sushi, japanese food", unrelated question):
+    "What's the weather today?" →
+      {{"intent": "web_search", "entities": {{"query": "weather today Ho Chi Minh City"}}, "confidence": 0.95}}
+      (profile NOT used — question unrelated to interests)
+
+  Example (profile is "none"):
+    "Best restaurant in HCM city?" →
+      {{"intent": "web_search", "entities": {{"query": "best restaurant Ho Chi Minh City"}}, "confidence": 0.93}}
+      (no profile to enrich with)
 
 DETECTION RULES FOR WEB_SEARCH:
   - Classify as "web_search" when the user asks for up-to-date facts (news, weather, sports scores, markets, current events), or explicitly asks to search/look up.
   - If the message is conversational or opinion-based and does not require fresh information, classify as "chat".
   - If the message is about todo operations (create/list/update/delete/search in personal tasks), do NOT classify as "web_search".
+
+DETECTION RULES FOR UPDATE_PROFILE:
+  - Classify as "update_profile" when the main user goal is sharing personal profile details (e.g., "I'm Alex", "I like hiking", "I prefer tea", "I work as a designer").
+  - If profile details are incidental and the main task is todo/web search, keep the primary task intent.
 
 IMPORTANT RULES:
 - confidence: 1.0 = 100% certain about what to do, 0.0 = completely unclear
@@ -108,3 +135,23 @@ You must always respond in the following JSON format:
   "should_search_web": <true or false>,
   "query": "<optimized search query if should_search_web is true, otherwise empty string>"
 }"""
+
+WEB_SEARCH_PROMPT = """User asked: "{user_message}"
+
+User profile context: {profile_context}
+
+Rewrite this as a specific web search query that incorporates the user's 
+relevant preferences if applicable. If the question isn't related to their 
+preferences, keep it unchanged. Return ONLY the search query, nothing else.
+
+Example:
+User asked: "best restaurant in HCM city?"
+Profile: interests: sushi, japanese food
+Rewritten: best sushi restaurant Ho Chi Minh City
+
+Example:
+User asked: "what time is it in Tokyo?"
+Profile: interests: sushi, japanese food
+Rewritten: current time Tokyo
+(unrelated question — keep query unchanged, ignore profile)
+"""

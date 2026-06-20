@@ -62,8 +62,6 @@ async def build_graph(db_session_factory, store=None):
     calendar_tools = []
     mcp_client = None
 
-    print("Attempting to load Google Calendar MCP tools...")
-
     try:
         mcp_client = MultiServerMCPClient({
             "google-calendar": {
@@ -94,7 +92,7 @@ async def build_graph(db_session_factory, store=None):
 
     # Create node functions
     
-    classify_intent, ask_clarification, todo_llm, execute_tools, web_search_node, chat_response_node, check_calendar_node, ask_calendar_confirmation = make_nodes(all_tools)
+    classify_intent, ask_clarification, todo_llm, execute_tools, web_search_node, chat_response_node, update_profile_node, check_calendar_node, ask_calendar_confirmation = make_nodes(all_tools)
  
     builder = StateGraph(AgentState)
     
@@ -107,6 +105,7 @@ async def build_graph(db_session_factory, store=None):
     builder.add_node("execute_tools", execute_tools)
     builder.add_node("web_search", web_search_node)
     builder.add_node("chat_response_node", chat_response_node)
+    builder.add_node("update_profile_node", update_profile_node)
  
     # Entry: always classify first
     builder.set_entry_point("classify_intent")
@@ -121,6 +120,7 @@ async def build_graph(db_session_factory, store=None):
             "ask_clarification": "ask_clarification",
             "todo_llm": "todo_llm",
             "check_calendar": "check_calendar",
+            "update_profile_node": "update_profile_node",
         },
     )
 
@@ -139,7 +139,7 @@ async def build_graph(db_session_factory, store=None):
 
     # After web search, end the turn
     builder.add_edge("web_search", END)
-    # builder.add_edge("chat_response_node", END)
+    builder.add_edge("update_profile_node", "chat_response_node")
     builder.add_conditional_edges(
         "chat_response_node",
         should_search_web_after_chat,
