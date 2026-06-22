@@ -10,8 +10,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
+      # redis:
+      #   condition: service_healthy
     volumes:
       - .:/app
       - ./app/google/gcp-oauth.keys.json:/app/app/google/gcp-oauth.keys.json:ro
